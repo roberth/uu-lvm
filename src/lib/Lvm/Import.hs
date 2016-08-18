@@ -5,7 +5,12 @@
 --------------------------------------------------------------------------------
 --  $Id$
 
-module Lvm.Import (lvmImport, lvmImportDecls) where
+-- | This module performs import resolution for lazy virtual machine files.
+--
+-- Two versions of the import functions are provided.
+--  - A version that reads the modules from files, by name
+--  - A generalized version, suffixed with @'@
+module Lvm.Import (lvmImport, lvmImport', lvmImportDecls, lvmImportDecls') where
 
 import Control.Monad
 import Data.List 
@@ -20,17 +25,23 @@ import qualified Lvm.Core.Module as Module
   abstract declarations or constructors/externs/customs
 --------------------------------------------------------------}
 lvmImport :: (Id -> IO FilePath) -> Module v -> IO (Module v)
-lvmImport findModule m
+lvmImport findModule = lvmImport' (findModule >=> lvmReadFile)
+
+lvmImport' :: Monad m => (Id -> m (Module v)) -> Module v -> m (Module v)
+lvmImport' findModule m
   = do{ mods <- lvmImportModules findModule m
-      ; let mods0 = lvmExpandModule mods (moduleName m) 
+      ; let mods0 = lvmExpandModule mods (moduleName m)
             mods1 = lvmResolveImports mods0
             mod1  = findMap (moduleName m) mods1
       ; return mod1{ moduleDecls = filter (not . isDeclImport) (moduleDecls mod1) }
       }
 
 lvmImportDecls :: (Id -> IO FilePath) -> [Decl v] -> IO [[Decl v]]
-lvmImportDecls findModule = mapM $ \importDecl -> do
-   m <- lvmImport findModule
+lvmImportDecls findModule = lvmImportDecls' (findModule >=> lvmReadFile)
+
+lvmImportDecls' :: Monad m => (Id -> m (Module v)) -> [Decl v] -> m [[Decl v]]
+lvmImportDecls' findModule = mapM $ \importDecl -> do
+   m <- lvmImport' findModule
        Module.Module
            { Module.moduleName     = idFromString "Main"
            , Module.moduleMajorVer = 0
@@ -43,19 +54,18 @@ lvmImportDecls findModule = mapM $ \importDecl -> do
   lvmImportModules: 
     recursively read all imported modules
 --------------------------------------------------------------}
-lvmImportModules :: (Id -> IO FilePath) -> Module v -> IO (IdMap (Module v))
+lvmImportModules :: Monad m => (Id -> m (Module v)) -> Module v -> m (IdMap (Module v))
 lvmImportModules findModule m
   = readModuleImports findModule emptyMap (moduleName m) m
-    
-readModuleImports :: (Id -> IO FilePath) -> IdMap (Module v) -> Id -> Module v -> IO (IdMap (Module v))
+
+readModuleImports :: Monad m => (Id -> m (Module v)) -> IdMap (Module v) -> Id -> Module v -> m (IdMap (Module v))
 readModuleImports findModule loaded x m
   = foldM (readModule findModule) (insertMap x m loaded) (imported m)
 
-readModule :: (Id -> IO FilePath) -> IdMap (Module v) -> Id -> IO (IdMap (Module v))
+readModule :: Monad m => (Id -> m (Module v)) -> IdMap (Module v) -> Id -> m (IdMap (Module v))
 readModule findModule loaded x
   | elemMap x loaded  = return loaded
-  | otherwise         = do{ fname <- findModule x                        
-                          ; m     <- lvmReadFile fname
+  | otherwise         = do{ m <- findModule x
                           ; readModuleImports findModule loaded x (filterPublic m)
                           }
 
